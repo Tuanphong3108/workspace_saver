@@ -35,16 +35,16 @@
             70% { transform: scale(1.1); box-shadow: 0 0 0 15px rgba(34, 211, 238, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
         }
-        #log { background: #020617; color: #10b981; font-size: 11px; padding: 1rem; border-radius: 1rem; text-align: left; height: 150px; overflow-y: auto; }
+        #log { background: #020617; color: #10b981; font-size: 11px; padding: 1rem; border-radius: 1rem; text-align: left; height: 150px; overflow-y: auto; font-family: monospace; }
     </style>
 </head>
 <body>
 
     <div class="status-card border border-white/50">
         <div class="pulse"></div>
-        <h1 class="text-2xl font-black text-slate-900 mb-2">GitHub Sync Pro</h1>
-        <p class="text-slate-500 text-sm mb-6">Trạm tàng hình của bro Phong.</p>
-        <div id="log">> System: Ready...</div>
+        <h1 class="text-2xl font-black text-slate-900 mb-2">GitHub Sync Engine</h1>
+        <p class="text-slate-500 text-sm mb-6">Đang trực chiến trên Repo của bro Phong.</p>
+        <div id="log">> System: Initializing...</div>
     </div>
 
     <script>
@@ -58,98 +58,130 @@
 
         function addLog(msg, type = 'info') {
             const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
-            logElement.innerHTML += `<div class="${type === 'error' ? 'text-red-400' : ''}">[${time}] ${msg}</div>`;
+            let color = "text-emerald-400";
+            if (type === 'error') color = "text-rose-400";
+            if (type === 'warning') color = "text-amber-400";
+            
+            logElement.innerHTML += `<div class="${color}">[${time}] ${msg}</div>`;
             logElement.scrollTop = logElement.scrollHeight;
         }
 
-        function formatToTxt(data) {
+        // Chuyển đổi Object Workspaces sang format text .txt
+        function formatToTxt(workspaces) {
             let content = "";
-            const ws = data.workspaces || {};
-            Object.keys(ws).forEach(name => {
-                content += `- [Workspace]: ${name}; ${ws[name].join(', ')}\n`;
+            Object.keys(workspaces).forEach(name => {
+                const links = workspaces[name];
+                content += `- [Workspace]: ${name}; ${links.join(', ')}\n`;
             });
-            return content;
+            return content || "Empty Workspace";
         }
 
+        // Parse ngược từ .txt sang Object
         function parseTxtToData(txt) {
             const workspaces = {};
             if (!txt) return { workspaces };
-            txt.split('\n').forEach(line => {
-                if (line.startsWith('- [Workspace]:')) {
+            const lines = txt.split('\n');
+            lines.forEach(line => {
+                if (line.trim().startsWith('- [Workspace]:')) {
                     const parts = line.split(';');
-                    const name = parts[0].replace('- [Workspace]:', '').trim();
-                    const linksStr = parts[1] || "";
-                    const links = linksStr.split(',').map(l => l.trim()).filter(l => l);
-                    if (name) workspaces[name] = links;
+                    if (parts.length >= 2) {
+                        const name = parts[0].replace('- [Workspace]:', '').trim();
+                        const linksStr = parts[1].trim();
+                        const links = linksStr.split(',').map(l => l.trim()).filter(l => l !== "");
+                        if (name) workspaces[name] = links;
+                    }
                 }
             });
             return { workspaces };
         }
 
-        async function updateGitHubFile(content) {
+        // Ghi dữ liệu lên GitHub
+        async function commitToGitHub(workspaces) {
             const url = `https://api.github.com/repos/${GH_CONFIG.owner}/${GH_CONFIG.repo}/contents/${GH_CONFIG.path}`;
+            const content = formatToTxt(workspaces);
+            
             try {
-                let sha = "";
-                // Thử lấy file cũ để lấy SHA
-                const res = await fetch(url, { headers: { "Authorization": `token ${GH_CONFIG.token}` } });
-                if (res.ok) { 
-                    const data = await res.json(); 
-                    sha = data.sha; 
-                } else if (res.status === 404) {
-                    addLog("File chưa tồn tại, hệ thống sẽ tự khởi tạo...");
+                addLog("Đang kiểm tra trạng thái file trên server...");
+                let sha = null;
+                
+                // Bước 1: Lấy SHA hiện tại (bắt buộc để update file)
+                const checkRes = await fetch(url, {
+                    headers: { "Authorization": `token ${GH_CONFIG.token}` }
+                });
+
+                if (checkRes.ok) {
+                    const fileData = await checkRes.json();
+                    sha = fileData.sha;
+                    addLog("Đã lấy được SHA. Chuẩn bị ghi đè...");
+                } else if (checkRes.status === 404) {
+                    addLog("File chưa tồn tại. Sẽ tạo mới file .txt", "warning");
                 }
 
-                // Ghi file (nếu không có SHA, GitHub hiểu là tạo mới)
+                // Bước 2: Thực hiện PUT để cập nhật nội dung file
                 const putRes = await fetch(url, {
                     method: "PUT",
-                    headers: { "Authorization": `token ${GH_CONFIG.token}`, "Content-Type": "application/json" },
+                    headers: {
+                        "Authorization": `token ${GH_CONFIG.token}`,
+                        "Content-Type": "application/json"
+                    },
                     body: JSON.stringify({
-                        message: `Sync: ${new Date().toLocaleString()}`,
-                        content: btoa(unescape(encodeURIComponent(content))),
+                        message: `PhongSync: Cập nhật không gian làm việc (${new Date().toLocaleString()})`,
+                        content: btoa(unescape(encodeURIComponent(content))), // Base64 chuẩn hỗ trợ tiếng Việt
                         sha: sha || undefined
                     })
                 });
-                
+
                 if (putRes.ok) {
-                    addLog("GitHub Updated!", "success");
+                    addLog("Ghi file thành công! Server đã nhận hàng.", "success");
+                    return true;
                 } else {
-                    const errData = await putRes.json();
-                    addLog("Lỗi ghi file: " + errData.message, "error");
+                    const err = await putRes.json();
+                    addLog("Thất bại: " + err.message, "error");
+                    return false;
                 }
-            } catch (e) { 
-                addLog("Err: " + e.message, "error"); 
+            } catch (e) {
+                addLog("Lỗi kết nối: " + e.message, "error");
+                return false;
             }
         }
 
+        // Lắng nghe lệnh từ trang quản lý (Parent)
         window.addEventListener("message", async (event) => {
-            if (event.data.type === "PUSH_DATA") {
-                addLog("Nhận lệnh lưu dữ liệu...");
-                await updateGitHubFile(formatToTxt(event.data.payload));
-                event.source.postMessage({ type: "SYNC_CONFIRMED" }, event.origin);
+            const { type, payload } = event.data;
+
+            if (type === "PUSH_DATA") {
+                addLog("Nhận lệnh ghi dữ liệu từ Extension...");
+                const success = await commitToGitHub(payload.workspaces);
+                if (success) {
+                    window.parent.postMessage({ type: "SYNC_CONFIRMED" }, "*");
+                }
             }
 
-            if (event.data.type === "REQUEST_PULL") {
-                addLog("Đang kéo dữ liệu từ GitHub Repo...");
+            if (type === "REQUEST_PULL") {
+                addLog("Đang kéo dữ liệu từ GitHub...");
                 try {
                     const url = `https://api.github.com/repos/${GH_CONFIG.owner}/${GH_CONFIG.repo}/contents/${GH_CONFIG.path}`;
-                    const res = await fetch(url, { headers: { "Authorization": `token ${GH_CONFIG.token}` } });
+                    const res = await fetch(url, {
+                        headers: { "Authorization": `token ${GH_CONFIG.token}` }
+                    });
+                    
                     if (res.ok) {
-                        const data = await res.json();
-                        const txt = decodeURIComponent(escape(atob(data.content)));
-                        const payload = parseTxtToData(txt);
-                        event.source.postMessage({ type: "PULL_DATA", payload }, event.origin);
-                        addLog("Dữ liệu đã về tới đội của bro!", "success");
-                    } else if (res.status === 404) {
-                        addLog("Không tìm thấy file trên Repo.", "error");
-                        event.source.postMessage({ type: "PULL_DATA", payload: { workspaces: {} } }, event.origin);
+                        const fileData = await res.json();
+                        const txtContent = decodeURIComponent(escape(atob(fileData.content)));
+                        const data = parseTxtToData(txtContent);
+                        window.parent.postMessage({ type: "PULL_DATA", payload: data }, "*");
+                        addLog("Dữ liệu đã được đồng bộ về máy!", "success");
+                    } else {
+                        addLog("Không tìm thấy dữ liệu trên cloud.", "warning");
                     }
-                } catch (e) { 
-                    addLog("Pull Error: " + e.message, "error"); 
+                } catch (e) {
+                    addLog("Lỗi kéo dữ liệu: " + e.message, "error");
                 }
             }
         });
 
-        // Báo hiệu cho Extension là Iframe đã sẵn sàng
+        // Sẵn sàng phục vụ
+        addLog("Hệ thống Bridge đã sẵn sàng!");
         window.parent.postMessage({ type: "SYNC_READY" }, "*");
     </script>
 </body>
