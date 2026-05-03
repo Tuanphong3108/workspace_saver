@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workspace Saver Bridge Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@100..1000&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Google Sans Flex', sans-serif;
+            background-color: #f0f4f8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        .status-card {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 2.5rem;
+            box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.15);
+            text-align: center;
+            max-width: 450px;
+            width: 90%;
+        }
+        .pulse {
+            width: 16px; height: 16px; background: #22d3ee; border-radius: 50%;
+            display: block; margin: 0 auto 1.5rem; animation: pulse-animation 2s infinite;
+        }
+        @keyframes pulse-animation {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 15px rgba(34, 211, 238, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+        }
+        #log { background: #020617; color: #10b981; font-size: 11px; padding: 1rem; border-radius: 1rem; text-align: left; height: 150px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+
+    <div class="status-card border border-white/50">
+        <div class="pulse"></div>
+        <h1 class="text-2xl font-black text-slate-900 mb-2">GitHub Sync Pro</h1>
+        <p class="text-slate-500 text-sm mb-6">Trạm tàng hình của bro Phong.</p>
+        <div id="log">> System: Ready...</div>
+    </div>
+
+    <script>
+        const logElement = document.getElementById('log');
+        const GH_CONFIG = {
+            token: "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", 
+            owner: "tuanphong3108",
+            repo: "workspace_saver",
+            path: "workspace_data.txt"
+        };
+
+        function addLog(msg, type = 'info') {
+            const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+            logElement.innerHTML += `<div class="${type === 'error' ? 'text-red-400' : ''}">[${time}] ${msg}</div>`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function formatToTxt(data) {
+            let content = "";
+            const ws = data.workspaces || {};
+            Object.keys(ws).forEach(name => {
+                content += `- [Workspace]: ${name}; ${ws[name].join(', ')}\n`;
+            });
+            return content;
+        }
+
+        function parseTxtToData(txt) {
+            const workspaces = {};
+            txt.split('\n').forEach(line => {
+                if (line.startsWith('- [Workspace]:')) {
+                    const [rawName, rawLinks] = line.split(';');
+                    const name = rawName.replace('- [Workspace]:', '').trim();
+                    const links = rawLinks ? rawLinks.split(',').map(l => l.trim()).filter(l => l) : [];
+                    if (name) workspaces[name] = links;
+                }
+            });
+            return { workspaces };
+        }
+
+        async function updateGitHubFile(content) {
+            const url = `https://api.github.com/repos/${GH_CONFIG.owner}/${GH_CONFIG.repo}/contents/${GH_CONFIG.path}`;
+            try {
+                let sha = "";
+                const res = await fetch(url, { headers: { "Authorization": `token ${GH_CONFIG.token}` } });
+                if (res.ok) { const data = await res.json(); sha = data.sha; }
+
+                const putRes = await fetch(url, {
+                    method: "PUT",
+                    headers: { "Authorization": `token ${GH_CONFIG.token}`, "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: `Sync: ${new Date().toLocaleString()}`,
+                        content: btoa(unescape(encodeURIComponent(content))),
+                        sha: sha
+                    })
+                });
+                if (putRes.ok) addLog("GitHub Updated!", "success");
+            } catch (e) { addLog("Err: " + e.message, "error"); }
+        }
+
+        window.addEventListener("message", async (event) => {
+            if (event.data.type === "PUSH_DATA") {
+                addLog("Nhận lệnh lưu dữ liệu...");
+                await updateGitHubFile(formatToTxt(event.data.payload));
+                event.source.postMessage({ type: "SYNC_CONFIRMED" }, event.origin);
+            }
+
+            if (event.data.type === "REQUEST_PULL") {
+                addLog("Đang kéo dữ liệu từ GitHub Repo...");
+                try {
+                    const url = `https://api.github.com/repos/${GH_CONFIG.owner}/${GH_CONFIG.repo}/contents/${GH_CONFIG.path}`;
+                    const res = await fetch(url, { headers: { "Authorization": `token ${GH_CONFIG.token}` } });
+                    if (res.ok) {
+                        const data = await res.json();
+                        const txt = decodeURIComponent(escape(atob(data.content)));
+                        const payload = parseTxtToData(txt);
+                        // Gửi ngược lại cho Extension
+                        event.source.postMessage({ type: "PULL_DATA", payload }, event.origin);
+                        addLog("Đã truyền dữ liệu về Extension!", "success");
+                    }
+                } catch (e) { addLog("Pull Error: " + e.message, "error"); }
+            }
+        });
+
+        window.parent.postMessage({ type: "SYNC_READY" }, "*");
+    </script>
+</body>
+</html>
