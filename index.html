@@ -73,11 +73,13 @@
 
         function parseTxtToData(txt) {
             const workspaces = {};
+            if (!txt) return { workspaces };
             txt.split('\n').forEach(line => {
                 if (line.startsWith('- [Workspace]:')) {
-                    const [rawName, rawLinks] = line.split(';');
-                    const name = rawName.replace('- [Workspace]:', '').trim();
-                    const links = rawLinks ? rawLinks.split(',').map(l => l.trim()).filter(l => l) : [];
+                    const parts = line.split(';');
+                    const name = parts[0].replace('- [Workspace]:', '').trim();
+                    const linksStr = parts[1] || "";
+                    const links = linksStr.split(',').map(l => l.trim()).filter(l => l);
                     if (name) workspaces[name] = links;
                 }
             });
@@ -88,20 +90,35 @@
             const url = `https://api.github.com/repos/${GH_CONFIG.owner}/${GH_CONFIG.repo}/contents/${GH_CONFIG.path}`;
             try {
                 let sha = "";
+                // Thử lấy file cũ để lấy SHA
                 const res = await fetch(url, { headers: { "Authorization": `token ${GH_CONFIG.token}` } });
-                if (res.ok) { const data = await res.json(); sha = data.sha; }
+                if (res.ok) { 
+                    const data = await res.json(); 
+                    sha = data.sha; 
+                } else if (res.status === 404) {
+                    addLog("File chưa tồn tại, hệ thống sẽ tự khởi tạo...");
+                }
 
+                // Ghi file (nếu không có SHA, GitHub hiểu là tạo mới)
                 const putRes = await fetch(url, {
                     method: "PUT",
                     headers: { "Authorization": `token ${GH_CONFIG.token}`, "Content-Type": "application/json" },
                     body: JSON.stringify({
                         message: `Sync: ${new Date().toLocaleString()}`,
                         content: btoa(unescape(encodeURIComponent(content))),
-                        sha: sha
+                        sha: sha || undefined
                     })
                 });
-                if (putRes.ok) addLog("GitHub Updated!", "success");
-            } catch (e) { addLog("Err: " + e.message, "error"); }
+                
+                if (putRes.ok) {
+                    addLog("GitHub Updated!", "success");
+                } else {
+                    const errData = await putRes.json();
+                    addLog("Lỗi ghi file: " + errData.message, "error");
+                }
+            } catch (e) { 
+                addLog("Err: " + e.message, "error"); 
+            }
         }
 
         window.addEventListener("message", async (event) => {
@@ -120,14 +137,19 @@
                         const data = await res.json();
                         const txt = decodeURIComponent(escape(atob(data.content)));
                         const payload = parseTxtToData(txt);
-                        // Gửi ngược lại cho Extension
                         event.source.postMessage({ type: "PULL_DATA", payload }, event.origin);
-                        addLog("Đã truyền dữ liệu về Extension!", "success");
+                        addLog("Dữ liệu đã về tới đội của bro!", "success");
+                    } else if (res.status === 404) {
+                        addLog("Không tìm thấy file trên Repo.", "error");
+                        event.source.postMessage({ type: "PULL_DATA", payload: { workspaces: {} } }, event.origin);
                     }
-                } catch (e) { addLog("Pull Error: " + e.message, "error"); }
+                } catch (e) { 
+                    addLog("Pull Error: " + e.message, "error"); 
+                }
             }
         });
 
+        // Báo hiệu cho Extension là Iframe đã sẵn sàng
         window.parent.postMessage({ type: "SYNC_READY" }, "*");
     </script>
 </body>
